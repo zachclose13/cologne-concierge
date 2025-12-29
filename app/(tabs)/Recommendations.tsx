@@ -10,14 +10,10 @@ type Fragrance = {
 };
 
 
-import StarRating from "../../components/StarRating";
 
-import { supabase } from '@/lib/supabase';
-import Constants from 'expo-constants';
 import { useLocalSearchParams } from 'expo-router';
-import { OpenAI } from 'openai';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Easing, SafeAreaView, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Animated, Easing, StyleSheet } from 'react-native';
 
 
 
@@ -164,6 +160,25 @@ const expertTips = [
   "Avoid overspraying indoors—closed spaces amplify intensity.",
   "Let the alcohol evaporate for 10 seconds before smelling a new fragrance."
 ];
+async function callAI(payload: any) {
+  const response = await fetch(
+    `${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/get-recommendation`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY}`,
+      },
+      body: JSON.stringify(payload),
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error("AI request failed");
+  }
+
+  return response.json();
+}
 
 
 
@@ -171,9 +186,8 @@ const expertTips = [
 
 
 
-const openai = new OpenAI({
-  apiKey: Constants.expoConfig?.extra?.EXPO_PUBLIC_OPENAI_API_KEY,
-});
+
+
 
 
 
@@ -279,6 +293,8 @@ useEffect(() => {
 
 const [aiResult, setAIResult] = useState('');
 const [topMatch, setTopMatch] = useState<Fragrance | null>(null);
+const safeTopMatch = topMatch!;
+
 const [notes, setNotes] = useState({
   top_notes: [] as string[],
   heart_notes: [] as string[],
@@ -376,432 +392,35 @@ Return ONLY valid JSON in this format:
 }
 `;
 
-  const completion = await openai.chat.completions.create({
-    model: "gpt-3.5-turbo",
-    messages: [{ role: "user", content: mappingPrompt }],
-    temperature: 0,
-  });
+ 
 
-  const raw = completion.choices[0].message.content ?? "{}";
+
+const { result } = await callAI({
+  type: "expand_profile",
+  prompt: mappingPrompt,
+});
+
+const raw = result ?? "{}";
 
   const jsonMatch = raw.match(/\{[\s\S]*\}/);
   if (!jsonMatch) return {};
-
-  try {
-    return JSON.parse(jsonMatch[0]);
-  } catch {
-    return {};
-  }
-}
-
-
-
-
-
-
-
-
-
-
-
-useEffect(() => {
-  const safeLower = (v: any) => (typeof v === 'string' ? v.toLowerCase() : '');
-  const fetchAndMatch = async () => {
-    try {
-      const { data: allFragrances, error } = await supabase
-        .from('Fragrances')
-        .select('*');
-
-      if (error || !allFragrances) {
-        console.error('Supabase error:', error);
-        setAIResult('Error fetching fragrance data.');
-        setLoading(false);
-        return;
-      }
-
-// ⭐ Expand user using AI
-const userProfile = await expandUserProfile(parsedAnswers);
-console.log("USER PROFILE:", userProfile);
-console.log("PRIMARY:", userProfile.primary_family);
-console.log("SECONDARY:", userProfile.secondary_family);
-console.log("AVOID:", userProfile.avoid_families);
-console.log("SEASON PRIORITY:", userProfile.season_priority);
-console.log("OCCASION TARGET:", userProfile.occasion_target);
-console.log("DAY/NIGHT:", userProfile.day_night);
-console.log("PERSONALITY:", userProfile.personality_traits);
-console.log("MATURITY:", userProfile.maturity_level);
-console.log("UNIQUENESS:", userProfile.uniqueness_preference);
-
-// ⭐ Enrich every fragrance using AI
-const enrichedFragrances = allFragrances;
-
-// ⭐ Scoring logic
-// ⭐ Scoring logic (NEW)
-function computeMatchScore(frag: any, user: any) {
-  let score = 0;
-
-  // === 1. PRIMARY FAMILY (STRONG) ===
-  if (frag.families?.includes(user.primary_family)) score += 25;
-  if (frag.dominant_note_family === user.primary_family) score += 8;
-
-  // === 2. PERSONALITY / VIBE MATCH (VERY STRONG) ===
-  frag.personality?.forEach((t: any) => {
-    if (user.personality_traits?.includes(t)) score += 15;
-  });
-
-  // === 3. OCCASION MATCH ===
-  if (frag.occasions?.includes(user.occasion_target)) score += 12;
-
-  // === 4. DAY/NIGHT MATCH ===
-  if (frag.day_night === user.day_night) score += 10;
-
-  // === 5. MATURITY LEVEL ===
-  if (frag.maturity_level === user.maturity_level) score += 10;
-  else score += Math.max(0, 6 - Math.abs(frag.maturity_level - user.maturity_level));
-
-  // === 6. SEASON MATCH USING WEIGHT MAP ===
-  if (frag.seasonal_weight && user.season_priority?.[0]) {
-    const season = user.season_priority[0];
-    const weight = frag.seasonal_weight[season] || 0;
-    score += weight * 12;
-  }
-
-  // === 7. SWEETNESS / FRESHNESS / DARKNESS MATCH ===
-  const vibe = (user.personality_traits?.[0] || "").toLowerCase();
-
-  if (vibe.includes("fresh")) score += frag.freshness_level * 1.8;
-  if (vibe.includes("sweet")) score += frag.sweetness_level * 1.8;
-  if (vibe.includes("dark")) score += frag.darkness_level * 1.8;
-  if (vibe.includes("clean")) score += frag.freshness_level * 1.2;
-
-  // === 8. BUDGET MATCH ===
-  if ((frag.price_range || "").toLowerCase() === (user.budget_level || "").toLowerCase()) {
-    score += 5;
-  }
-
-  // === 9. STRENGTH MATCH ===
-  if (user.strength_preference?.toLowerCase().includes("beast") &&
-      frag.performance_category === "beast mode")
-    score += 12;
-
-  if (user.strength_preference?.toLowerCase().includes("strong") &&
-      frag.performance_category === "strong")
-    score += 10;
-
-  // === 10. GENDER PROFILE ===
-  if (frag.gender_profile === "masculine") score += 3;
-  if (frag.gender_profile === "unisex") score += 5;
-
-  // === 11. UNIVERSAL METRICS ===
-  score += (frag.mass_appeal || 0) * 1.2;
-  score += (frag.uniqueness || 0) * 0.7;
-  score += (frag.versatility_score || frag.versatility || 0) * 1.3;
-
-  // === 12. AVOID NOTES PENALTY ===
-  if (user.avoid_families?.some((f: any) => frag.families?.includes(f))) {
-    score -= 25;
-  }
-    // === 13. USER PREFERRED FAMILIES (new question) ===
-  if (user.preferred_families && frag.families) {
-    user.preferred_families.forEach((fam: string) => {
-      if (frag.families.includes(fam)) score += 10;
-    });
-  }
-
-  // === 14. SKIN TYPE IMPACT ON LONGEVITY ===
-  if (user.skin_type === "Dry Skin") {
-    score += (frag.longevity || 0) * 1.2;
-  }
-  if (user.skin_type === "Oily Skin") {
-    score += (frag.projection || 0) * 1.2;
-  }
-
-  // === 15. LONGEVITY PREFERENCE (How long user wants it to last) ===
-  if (user.longevity_preference) {
-    const diff = Math.abs((frag.longevity || 0) - user.longevity_preference);
-    score += Math.max(0, 15 - diff * 4);  // closer match = higher score
-  }
-
-  // === 16. NOTE GROUP PREFERENCE (Fresh / Sweet / Woody / etc.) ===
-  if (user.note_group_preference) {
-    const pref = user.note_group_preference.toLowerCase();
-
-    if (pref.includes("fresh")) score += (frag.freshness_level || 0) * 2;
-    if (pref.includes("sweet")) score += (frag.sweetness_level || 0) * 2;
-    if (pref.includes("woody")) score += (frag.wood_level || 0) * 2;
-    if (pref.includes("amber")) score += (frag.amber_level || 0) * 2;
-  }
-
-  // === 17. FRESH VS SWEET BALANCE (Very Fresh → Very Sweet) ===
-  if (user.fresh_sweet_balance) {
-    // fresh_sweet_balance: 1 = very fresh, 5 = very sweet
-    score += (user.fresh_sweet_balance * (frag.sweetness_level || 0)) * 0.8;
-    score += ((6 - user.fresh_sweet_balance) * (frag.freshness_level || 0)) * 0.8;
-  }
-
-  // === 18. UNIQUENESS PREFERENCE ===
-  if (user.uniqueness_preference && frag.uniqueness) {
-    const diff = Math.abs(frag.uniqueness - user.uniqueness_preference * 2);
-    score += Math.max(0, 12 - diff * 1.5);
-  }
-
-
-  return score;
-}
-
-
-
-// ⭐ Compute scores for all fragrances
-const scored = enrichedFragrances.map(frag => {
-  frag.projection = Number(frag.projection);
-frag.longevity = Number(frag.longevity);
-frag.mass_appeal = Number(frag.mass_appeal);
-frag.uniqueness = Number(frag.uniqueness);
-frag.versatility = Number(frag.versatility);
-frag.maturity_level = Number(frag.maturity_level);
-
-  const score = computeMatchScore(frag, userProfile);
-
-  const MAX_POSSIBLE = 185;
-// optimized scaling
-
-  return {
-    ...frag,
-    score,
-    matchPercent: Math.min(
-      100,
-      Math.max(0, Math.round((score / MAX_POSSIBLE) * 100))
-    ),
-  };
-});
-
-
-// ⭐ Pick the top match
-const sorted = scored.sort((a, b) => b.score - a.score);
-const best = sorted[0] || null;
-setTopMatch(best);
-
-// === AI CALL FOR NOTES + LONGEVITY + PROJECTION ===
 try {
-  const notesPrompt = `
-You are a fragrance expert.
-
-Return a JSON object with ONLY the following fields:
-
-{
-  "top_notes": ["note1", "note2", "note3"],
-  "heart_notes": ["note1", "note2", "note3"],
-  "base_notes": ["note1", "note2", "note3"],
-  "longevity": 1-5,
-  "projection": 1-5
-}
-
-Fragrance: ${best.name}
-
-Do NOT return anything except valid JSON.
-`;
-
-  const notesCompletion = await openai.chat.completions.create({
-    model: "gpt-3.5-turbo",
-    messages: [{ role: "user", content: notesPrompt }],
-    temperature: 0.3,
-  });
-
-  const rawNotes = notesCompletion.choices[0].message.content ?? "{}";
-  const parsedNotes = JSON.parse(rawNotes);
-
-  setNotes({
-    top_notes: parsedNotes.top_notes || [],
-    heart_notes: parsedNotes.heart_notes || [],
-    base_notes: parsedNotes.base_notes || [],
-    longevity: parsedNotes.longevity ?? null,
-    projection: parsedNotes.projection ?? null,
-  });
-
-} catch (e) {
-  console.error("Notes AI Error:", e);
+  return JSON.parse(jsonMatch[0]);
+} catch {
+  return {};
 }
 
 
-      // Pick a random expert tip for fallback
-const randomTip = expertTips[Math.floor(Math.random() * expertTips.length)];
-
-
-      if (!best) {
-        setAIResult('No matching fragrances found.');
-        setLoading(false);
-        return;
-      }
-
-      // ✅ Only one prompt now
-      const promptText = `
-You are a fragrance expert.
-
-User profile:
-- Age: ${parsedAnswers.q1}
-- Occasion: ${parsedAnswers.q2}
-- Season: ${parsedAnswers.q3}
-- Vibe: ${parsedAnswers.q4}
-- Budget: ${parsedAnswers.q6}
-- Strength: ${parsedAnswers.q5 || parsedAnswers.q7}
-
-Fragrance:
-${best.name} - ${best.season || 'n/a'}, ${best.vibe || 'n/a'}, ${best.strength || 'n/a'} (${best.matchPercent}% Match)
-
-Return exactly two lines in this format:
-Reason: <one sentence explaining why it fits>
-Tip: <one-sentence expert tip>
-      `.trim();
-
-      const completion = await openai.chat.completions.create({
-        model: 'gpt-3.5-turbo',
-        messages: [{ role: 'user', content: promptText }],
-        temperature: 0.7,
-      });
-
-      const message = completion.choices[0].message.content?.trim() || '';
-      setAIResult(message);
-
-      // Extract just Reason and Tip
-      const reasonMatch = message.match(/^\s*Reason:\s*(.+)$/im);
-      const tipMatch = message.match(/^\s*Tip:\s*(.+)$/im);
-
-      setTopMatch(prev =>
-        prev
-          ? {
-              ...prev,
-              reason: reasonMatch ? reasonMatch[1].trim() : prev.reason || '',
-            tip: tipMatch ? tipMatch[1].trim() : randomTip,
-
-            }
-          : prev
-      );
-    } catch (err) {
-      console.error('GPT Match Error:', err);
-      setAIResult('Something went wrong.');
-    } finally {
-setTimeout(() => {
-  setLoading(false);
-}, 800); // give time for spinner to render
-
-}
-
-  };
-
-  fetchAndMatch();
-}, [parsedAnswers]);
 
 
 
 
-return (
-<View style={{ flex: 1, position: "relative" }}>
 
-    
-    {/* FULLSCREEN LOADER */}
-    {loading && (
-      <View style={styles.loaderWrapper}>
-        <Animated.Image
-        source={require("@/assets/icons/newloader.png")}
 
-          style={{
-            width: 140,
-            height: 140,
-            transform: [{ rotate: spin }],
-            opacity: 0.9,
-          }}
-          resizeMode="contain"
-        />
-      </View>
-    )}
 
-  <SafeAreaView style={[styles.container, { zIndex: 1 }]}>
 
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <Text style={styles.header}>Your Top Match</Text>
 
-        {!loading && topMatch && (
-          <View style={styles.card}>
-            {/* === IMAGE LEFT / TEXT RIGHT === */}
-<View style={styles.topRow}>
 
-  {/* LEFT IMAGE */}
-  <Animated.Image
-    source={
-      topMatch?.image && fragranceImages[topMatch.image]
-        ? fragranceImages[topMatch.image]
-        : null
-    }
-    style={[
-      styles.leftImage,
-      {
-        opacity: bottleOpacity,
-        transform: [
-          { translateY: bottleTranslateY },
-          { translateY: bottleFloat }
-        ],
-      },
-    ]}
-    resizeMode="contain"
-  />
-
-  {/* RIGHT TEXT */}
-  <View style={styles.rightInfo}>
-    <Text style={styles.matchPercent}>{topMatch.matchPercent}% Match</Text>
-    <Text style={styles.fragranceName}>{topMatch.name}</Text>
-    <Text style={styles.description}>{topMatch.reason}</Text>
-  </View>
-</View>
-
-{/* NOTES SECTION */}
-{notes.top_notes.length > 0 && (
-  <View style={{ marginTop: 20 }}>
-    <Text style={styles.notesHeader}>Notes Breakdown</Text>
-
-    <View style={styles.notesRow}>
-      <View style={styles.notesColumn}>
-        <Text style={styles.notesLabel}>Top Notes</Text>
-        <Text style={styles.notesText}>{notes.top_notes.join(", ")}</Text>
-
-        <Text style={styles.notesLabel}>Base Notes</Text>
-        <Text style={styles.notesText}>{notes.base_notes.join(", ")}</Text>
-      </View>
-
-      <View style={styles.notesColumn}>
-        <Text style={styles.notesLabel}>Heart Notes</Text>
-        <Text style={styles.notesText}>{notes.heart_notes.join(", ")}</Text>
-
-        <Text style={styles.notesLabel}>Longevity</Text>
-        <StarRating rating={notes.longevity || 0} />
-
-        <Text style={styles.notesLabel}>Projection</Text>
-        <StarRating rating={notes.projection || 0} />
-      </View>
-    </View>
-  </View>
-)}
-
-{/* EXPERT TIP */}
-<View style={{ marginTop: 20 }}>
-  <Text style={styles.tipTitle}>Expert Tip</Text>
-  <Text style={styles.tipText}>{topMatch.tip}</Text>
-</View>
-
-{/* SHOP BUTTON */}
-<Animated.View style={{ transform: [{ scale: buttonScale }] }}>
-  <TouchableOpacity style={[styles.shopButton, { marginTop: 20 }]}>
-    <Text style={styles.shopButtonText}>Shop Now</Text>
-  </TouchableOpacity>
-</Animated.View>
-
-            {/* your entire topMatch UI here */}
-          </View>
-        )}
-
-      </ScrollView>
-    </SafeAreaView>
-  </View>
-);
 
 
 
@@ -974,4 +593,4 @@ loaderWrapper: {
 
 
 
-});
+});}
